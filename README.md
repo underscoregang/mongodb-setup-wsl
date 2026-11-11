@@ -1,4 +1,4 @@
-# MongoDB 8.0 on WSL2 (Ubuntu 24.04): Install and Access from Windows
+# MongoDB 8.0 on WSL2 (Ubuntu 24.04)
 
 This guide installs MongoDB Community Edition 8.0 in **Ubuntu 24.04 on WSL2** and connects to it from **Windows** using `127.0.0.1:27017`. It does **not** expose MongoDB to the internet or other LAN devices.
 
