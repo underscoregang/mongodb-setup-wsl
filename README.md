@@ -1,194 +1,193 @@
-# MongoDB 8.0 on WSL2 (Ubuntu 24.04)
+# Docker Compose - MongoDB & Postgres on WSL2
 
-This guide installs MongoDB Community Edition 8.0 in **Ubuntu 24.04 on WSL2** and connects to it from **Windows** using `127.0.0.1:27017`. It does **not** expose MongoDB to the internet or other LAN devices.
+This guide shows how to install Docker Engine and Docker Compose directly in **Ubuntu 24.04 on WSL 2**, then build and start the Compose project at:
 
-> **Storage:** If your Ubuntu WSL distribution is installed at `D:\WSL\Ubuntu-24.04`, its Linux filesystem (including MongoDB's default `/var/lib/mongodb`) resides inside its virtual disk on **D:**. Confirm the location before proceeding. WSL itself still uses some C: space.
+- Windows: `F:\Project\Docker\local\docker-compose.yml`
+- WSL: `/mnt/f/Project/Docker/local/docker-compose.yml`
 
-## 1. Check WSL and launch Ubuntu 24.04 (Windows PowerShell)
+> Run PowerShell commands in **Windows PowerShell** and Bash commands in **Ubuntu WSL**. You do **not** need Docker Desktop.
+
+## 1. Verify WSL 2 (PowerShell)
 
 ```powershell
-wsl --list --verbose
+wsl -l -v
+```
+
+Your distribution should be `Ubuntu-24.04` with `VERSION` set to `2`.
+
+Launch it:
+
+```powershell
 wsl -d Ubuntu-24.04
 ```
 
-Inside Ubuntu, verify:
-
-```bash
-cat /etc/os-release | grep VERSION_ID
-```
-
-Expected: `VERSION_ID="24.04"`.
-
-To check the distro's storage location from **Windows PowerShell**:
-
-```powershell
-Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss |
-  ForEach-Object {
-    $d = Get-ItemProperty $_.PSPath
-    [PSCustomObject]@{ Name=$d.DistributionName; Location=$d.BasePath }
-  } | Format-Table -AutoSize
-```
-
-## 2. Install MongoDB 8.0 (Ubuntu Bash)
-
-```bash
-sudo apt update
-sudo apt install -y curl gnupg
-
-curl -fsSL https://pgp.mongodb.com/server-8.0.asc \
-  | sudo gpg --dearmor -o /usr/share/keyrings/mongodb-server-8.0.gpg
-
-echo 'deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse' \
-  | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
-
-sudo apt update
-sudo apt install -y mongodb-org
-mongod --version
-```
-
-If the signing-key file already exists, `gpg` may prompt before overwriting it. Review the prompt instead of blindly repeating the command.
-
-Official instructions: https://www.mongodb.com/docs/v8.0/tutorial/install-mongodb-on-ubuntu/
-
-## 3. Enable systemd and start MongoDB
-
-Check Ubuntu's init system:
+## 2. Verify systemd (Ubuntu)
 
 ```bash
 ps -p 1 -o comm=
 ```
 
-If it says `systemd`, run:
-
-```bash
-sudo systemctl enable --now mongod
-sudo systemctl status mongod --no-pager
-```
-
-If it does **not** say `systemd`, edit `/etc/wsl.conf`:
+If it prints `systemd`, proceed. Otherwise, edit `/etc/wsl.conf`:
 
 ```bash
 sudo nano /etc/wsl.conf
 ```
 
-Add `systemd=true` under an existing `[boot]` section (or create the section):
+Add `systemd=true` under an existing `[boot]` section, or create that section:
 
 ```ini
 [boot]
 systemd=true
 ```
 
-In **Windows PowerShell** (not Ubuntu Bash):
+Save and close the editor. In **PowerShell**, restart WSL:
 
 ```powershell
 wsl --shutdown
 wsl -d Ubuntu-24.04
 ```
 
-Then, in Ubuntu Bash:
+Check again that `ps -p 1 -o comm=` prints `systemd`.
+
+## 3. Install prerequisites (Ubuntu)
 
 ```bash
-sudo systemctl enable --now mongod
-sudo systemctl status mongod --no-pager
+sudo apt update
+sudo apt install -y ca-certificates curl
 ```
 
-## 4. Bind MongoDB to localhost only
-
-Edit MongoDB's configuration in Ubuntu:
+## 4. Add Docker's official Ubuntu repository (Ubuntu)
 
 ```bash
-sudo nano /etc/mongod.conf
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
 ```
-
-Ensure the existing `net` section contains (do not create duplicate `net` sections):
-
-```yaml
-net:
-  port: 27017
-  bindIp: 127.0.0.1
-```
-
-Restart and check:
 
 ```bash
-sudo systemctl restart mongod
-sudo ss -lntp | grep 27017
-mongosh --host 127.0.0.1 --port 27017 --eval 'db.adminCommand({ ping: 1 })'
+sudo tee /etc/apt/sources.list.d/docker.sources > /dev/null <<EOF_REPO
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF_REPO
 ```
-
-A successful ping includes `{ ok: 1 }`.
-
-> Localhost binding is for **same-computer development**. Do not change `bindIp` to `0.0.0.0` to expose an unauthenticated MongoDB server.
-
-## 5. Connect from Windows
-
-WSL2 generally forwards Linux services bound to localhost to Windows localhost. In **Windows PowerShell**:
-
-```powershell
-Test-NetConnection 127.0.0.1 -Port 27017
-Get-NetTCPConnection -LocalPort 27017 -State Listen -ErrorAction SilentlyContinue |
-  Select-Object LocalAddress, LocalPort, OwningProcess
-```
-
-Expected: `TcpTestSucceeded : True`.
-
-**Port conflict:** If MongoDB is also installed as a native Windows service, port 27017 might be served by Windows rather than WSL. Inspect first:
-
-```powershell
-Get-Service *mongo*
-```
-
-Only if you deliberately want to stop the native Windows instance, find its exact service name and stop that service; do not delete its database files.
-
-In **MongoDB Compass** on Windows, use:
-
-```text
-mongodb://127.0.0.1:27017
-```
-
-For a local Node.js or Python project:
-
-```dotenv
-MONGODB_URI=mongodb://127.0.0.1:27017/myapp
-```
-
-## 6. Test by creating a database (Ubuntu Bash)
 
 ```bash
-mongosh
+sudo apt update
+apt-cache policy docker-ce
 ```
 
-Then inside `mongosh`:
+A nonempty `Candidate` version indicates the package is available.
 
-```javascript
-use myapp
-db.users.insertOne({ name: 'Test User', createdAt: new Date() })
-db.users.find()
-```
-
-Refresh Compass to see the `myapp` database.
-
-## 7. Troubleshooting
-
-**`ECONNREFUSED 127.0.0.1:27017` inside Ubuntu:**
+## 5. Install and start Docker (Ubuntu)
 
 ```bash
-sudo systemctl status mongod --no-pager
-sudo journalctl -u mongod -n 50 --no-pager
-sudo ss -lntp | grep 27017
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo systemctl enable --now docker
+sudo systemctl is-active docker
+sudo docker --version
+sudo docker compose version
+sudo docker run --rm hello-world
 ```
 
-If the service has just started, wait a few seconds and retry the ping. If it exits, inspect the journal for the underlying error.
+The service should be `active`, and the test should print `Hello from Docker!`.
 
-**`Get-NetTCPConnection: command not found`:** This is a **PowerShell** command. Run it in Windows PowerShell, not Ubuntu Bash.
+## 6. Optional: run Docker without sudo (Ubuntu)
 
-**Windows cannot connect but Ubuntu can:** Check whether the native Windows MongoDB service owns port 27017; restart WSL with `wsl --shutdown` and reopen Ubuntu if necessary. Check your WSL networking settings if localhost forwarding is disabled.
+```bash
+sudo usermod -aG docker "$USER"
+newgrp docker
+```
 
-**MongoDB stops after WSL shuts down:** `systemctl enable mongod` starts it when the Ubuntu distribution starts; it does not keep WSL running indefinitely.
+Then verify:
 
-## 8. Security notes
+```bash
+docker info
+docker compose version
+```
 
-- This configuration is for **localhost access only** and does not expose MongoDB to other computers.
-- MongoDB's default local development setup may have authentication disabled. Do not open port 27017 on your router or firewall for public access.
-- For LAN or remote access, first configure MongoDB users, authentication, appropriate firewall rules, and ideally a secure tunnel or VPN.
-- Back up important databases before removing or moving your WSL distribution.
+**Security:** The `docker` group grants root-equivalent privileges. If you prefer not to grant these permissions, skip this step and prefix Docker commands with `sudo`.
+
+## 7. Build and start your Compose project (Ubuntu)
+
+Navigate to the directory containing the Compose file:
+
+```bash
+cd /mnt/f/Project/Docker/local
+ls -la
+```
+
+Validate the Compose configuration:
+
+```bash
+docker compose config
+```
+
+> The validation output may display environment variables or secrets. Review it before sharing publicly.
+
+Build and start services in the background:
+
+```bash
+docker compose up -d --build
+```
+
+If you skipped Step 6, use `sudo docker compose ...` instead.
+
+Check containers and logs:
+
+```bash
+docker compose ps
+docker compose logs -f
+```
+
+Press **Ctrl+C** to stop following logs; this does not stop containers started with `-d`.
+
+### Run from any directory
+
+```bash
+docker compose -f /mnt/f/Project/Docker/local/docker-compose.yml up -d --build
+```
+
+### Useful commands
+
+| Task | Command |
+| --- | --- |
+| Validate configuration | `docker compose config` |
+| Build only | `docker compose build` |
+| Build and start in background | `docker compose up -d --build` |
+| Show running services | `docker compose ps` |
+| Follow logs | `docker compose logs -f` |
+| Restart services | `docker compose restart` |
+| Stop services | `docker compose stop` |
+| Stop and remove containers/networks | `docker compose down` |
+| List images | `docker images` |
+
+**Caution:** `docker compose down -v` also removes named volumes, which can delete persisted application data. Do not use it unless that is intended.
+
+## Troubleshooting
+
+**`docker: command not found`**: Complete Step 5 and reopen Ubuntu if necessary.
+
+**`Cannot connect to the Docker daemon`**:
+
+```bash
+sudo systemctl status docker
+sudo systemctl start docker
+```
+
+**`permission denied ... docker.sock`**: Use `sudo docker ...` or complete Step 6, then open a fresh shell.
+
+**`no configuration file provided`**: Run `pwd` and `ls -la`; make sure you're in `/mnt/f/Project/Docker/local` or specify `-f`.
+
+**Build fails due to missing paths or files**: Review the `build:` context, Dockerfile paths, `.env` files, and bind mounts in `docker-compose.yml`.
+
+**Performance on `/mnt/f`**: Windows-mounted files can be slower for Linux container builds and bind mounts. For better performance, consider storing source code in Ubuntu's Linux filesystem (such as `~/projects`) and adjust any paths accordingly.
+
+**Note:** `docker compose up -d --build` builds only services that specify a build configuration. Services using only `image:` generally pull or use the named image.
+
+## Official reference
+
+Docker Engine on Ubuntu: https://docs.docker.com/engine/install/ubuntu/
